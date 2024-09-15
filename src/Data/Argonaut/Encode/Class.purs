@@ -10,7 +10,7 @@ import Data.Identity (Identity)
 import Data.List (List)
 import Data.List.Types (NonEmptyList)
 import Data.Map as M
-import Data.Maybe (Maybe)
+import Data.Maybe (Maybe(..))
 import Data.NonEmpty (NonEmpty)
 import Data.Set as S
 import Data.String (CodePoint)
@@ -22,6 +22,9 @@ import Prim.Row as Row
 import Prim.RowList as RL
 import Record as Record
 import Type.Proxy (Proxy(..))
+
+import Data.Variant (Variant)
+import Data.Variant as Variant
 
 class EncodeJson a where
   encodeJson :: a -> Json
@@ -121,3 +124,33 @@ instance gEncodeJsonCons ::
       (reflectSymbol _field)
       (encodeJson $ Record.get _field row)
       (gEncodeJson row (Proxy :: Proxy tail))
+
+-- Variant --
+instance encodeVariant ::
+  ( GEncodeVariant row list
+  , RL.RowToList row list
+  ) =>
+  EncodeJson (Variant row) where
+  encodeJson variant =
+    fromObject $ gEncodeVariant variant (Proxy :: Proxy list)
+
+class GEncodeVariant (row :: Row Type) (list :: RL.RowList Type) where
+  gEncodeVariant :: forall proxy. Variant row -> proxy list -> FO.Object Json
+
+instance gEncodeVariantNil :: GEncodeVariant row RL.Nil where
+  gEncodeVariant _ _ = FO.empty
+
+instance gEncodeVariantCons ::
+  ( EncodeJson value
+  , GEncodeVariant row tail
+  , IsSymbol field
+  , Row.Cons field value tail' row
+  ) =>
+  GEncodeVariant row (RL.Cons field value tail) where
+  gEncodeVariant variant _ =
+    case Variant.prj (Proxy :: Proxy field) variant of
+      Just value -> do
+        let _field = Proxy :: Proxy field
+        FO.singleton (reflectSymbol _field) (encodeJson value)
+      Nothing ->
+        gEncodeVariant variant (Proxy :: Proxy tail)
