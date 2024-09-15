@@ -5,7 +5,7 @@ import Data.Argonaut.Decode.Decoders
 import Data.Argonaut.Core (Json, toObject)
 import Data.Argonaut.Decode.Error (JsonDecodeError(..))
 import Data.Array.NonEmpty (NonEmptyArray)
-import Data.Bifunctor (lmap)
+import Data.Bifunctor (lmap, bimap)
 import Data.Either (Either(..))
 import Data.Identity (Identity)
 import Data.List (List)
@@ -24,6 +24,9 @@ import Prim.Row as Row
 import Prim.RowList as RL
 import Record as Record
 import Type.Proxy (Proxy(..))
+
+import Data.Variant (Variant)
+import Data.Variant as Variant
 
 class DecodeJson a where
   decodeJson :: Json -> Either JsonDecodeError a
@@ -136,6 +139,7 @@ instance gDecodeJsonCons ::
       Nothing ->
         Left $ AtKey fieldName MissingValue
 
+
 class DecodeJsonField a where
   decodeJsonField :: Maybe Json -> Maybe (Either JsonDecodeError a)
 
@@ -149,3 +153,44 @@ else instance decodeFieldId ::
   DecodeJson a =>
   DecodeJsonField a where
   decodeJsonField j = decodeJson <$> j
+
+-------------
+-- Variant --
+-------------
+instance
+  ( DecodeVariantHelper row list
+  , RL.RowToList row list
+  ) =>
+  DecodeJson (Variant row) where
+  decodeJson json =
+    case toObject json of
+      Just object -> decodeVariantHelper object (Proxy :: Proxy list)
+      Nothing -> Left $ TypeMismatch "Object"
+
+
+class DecodeVariantHelper (row :: Row Type) (list :: RL.RowList Type) | list -> row where
+  decodeVariantHelper :: forall proxy. FO.Object Json -> proxy list -> Either JsonDecodeError (Variant row)
+
+instance DecodeVariantHelper () RL.Nil where
+  decodeVariantHelper _ _ = Left $ MissingValue
+
+instance
+  ( DecodeJson value
+  , DecodeVariantHelper row tail
+  , IsSymbol field
+  , Row.Cons field value trash row
+  ) =>
+  DecodeVariantHelper row (RL.Cons field value tail) where
+    decodeVariantHelper object _ = do
+      let
+        _field = Proxy :: Proxy field
+        fieldName = reflectSymbol _field
+        fieldValue = FO.lookup fieldName object
+
+      case fieldValue of
+        Just rawValue -> bimap
+          (\err -> AtKey fieldName err)
+          (\value -> Variant.inj _field value)
+          $ decodeJson rawValue
+        Nothing ->
+          decodeVariantHelper object (Proxy :: Proxy tail)
